@@ -34,7 +34,7 @@ fn init() {
 #[test]
 fn balance_init_cluster() {
     block_on_current(async {
-        let node_count = 4;
+        let node_count = 3;
         let mut ctx = TestContext::new("db-col-mng");
         let start = tokio::time::Instant::now();
         let nodes = ctx.bootstrap_servers(node_count).await;

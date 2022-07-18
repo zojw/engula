@@ -14,7 +14,7 @@
 
 use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
-use engula_api::server::v1::{NodeDesc, ReplicaDesc};
+use engula_api::server::v1::{NodeDesc, RaftRole, ReplicaDesc};
 use tracing::trace;
 
 use super::*;
@@ -104,20 +104,36 @@ impl<T: AllocSource> ReplicaCountPolicy<T> {
         groups: &HashMap<u64, GroupDesc>,
     ) -> Option<(ReplicaDesc, u64)> {
         // TODO: sort & rank replica
-        self.alloc_source
-            .node_replicas(&src.id)
-            .into_iter()
-            .find(|(_, g)| {
-                if *g == ROOT_GROUP_ID {
-                    return false;
+        let mut replicas = self.alloc_source.node_replicas(&src.id);
+        // move non-leader replica as possible as it can.
+        replicas.sort_by(|r1, r2| {
+            let s1 = self
+                .alloc_source
+                .replica_state(&r1.0.id)
+                .unwrap_or_default();
+            let s2 = self
+                .alloc_source
+                .replica_state(&r2.0.id)
+                .unwrap_or_default();
+            if s1.role != RaftRole::Leader as i32 && s2.role == RaftRole::Leader as i32 {
+                return Ordering::Greater;
+            }
+            if s2.role == RaftRole::Leader as i32 && s1.role == RaftRole::Leader as i32 {
+                return Ordering::Less;
+            }
+            r2.0.id.cmp(&r1.0.id)
+        });
+        replicas.into_iter().find(|(_, g)| {
+            if *g == ROOT_GROUP_ID {
+                return false;
+            }
+            if let Some(group) = groups.get(g) {
+                if !group.replicas.iter().any(|r| r.node_id == target.id) {
+                    return true;
                 }
-                if let Some(group) = groups.get(g) {
-                    if !group.replicas.iter().any(|r| r.node_id == target.id) {
-                        return true;
-                    }
-                }
-                false
-            })
+            }
+            false
+        })
     }
 
     fn mean_replica_count(&self) -> f64 {
