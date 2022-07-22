@@ -21,7 +21,7 @@ use self::{
     policy_leader_cnt::LeaderCountPolicy, policy_replica_cnt::ReplicaCountPolicy,
     policy_shard_cnt::ShardCountPolicy,
 };
-use super::RootShared;
+use super::{schedule::OngoingReserved, RootShared};
 use crate::{bootstrap::REPLICA_PER_GROUP, Result};
 
 #[cfg(test)]
@@ -129,7 +129,7 @@ impl<T: AllocSource> Allocator<T> {
         }
     }
     /// Compute group change action.
-    pub async fn compute_group_action(&self) -> Result<GroupAction> {
+    pub async fn compute_group_action(&self, reserved: &OngoingReserved) -> Result<GroupAction> {
         if !self.config.enable_group_balance {
             return Ok(GroupAction::Noop);
         }
@@ -141,28 +141,32 @@ impl<T: AllocSource> Allocator<T> {
             return Ok(GroupAction::Noop);
         }
 
-        Ok(match self.current_groups().cmp(&self.desired_groups()) {
+        let current = self.current_groups();
+        let desired = self.desired_groups();
+        Ok(match current.cmp(&self.desired_groups()) {
             std::cmp::Ordering::Less => {
                 // it happend when:
                 // - new join node
                 // - increase cpu quota for exist node(e.g. via cgroup)
                 // - increate replica_num configuration
-                GroupAction::Add(self.desired_groups() - self.current_groups())
+                GroupAction::Add(desired - current)
             }
             std::cmp::Ordering::Greater => {
                 // it happens when:
                 //  - joined node exit
                 //  - decrease cpu quota for exist node(e.g. via cgroup)
                 //  - decrease replica_num configuration
-                let want_remove = self.current_groups() - self.desired_groups();
-                GroupAction::Remove(self.preferred_remove_groups(want_remove))
+                GroupAction::Remove(self.preferred_remove_groups(current - desired))
             }
             std::cmp::Ordering::Equal => GroupAction::Noop,
         })
     }
 
     /// Compute replica change action.
-    pub async fn compute_replica_action(&self) -> Result<Vec<ReplicaAction>> {
+    pub async fn compute_replica_action(
+        &self,
+        reserved: &OngoingReserved,
+    ) -> Result<Vec<ReplicaAction>> {
         if !self.config.enable_replica_balance {
             return Ok(vec![]);
         }
@@ -218,7 +222,10 @@ impl<T: AllocSource> Allocator<T> {
         ShardCountPolicy::with(self.alloc_source.to_owned()).allocate_shard(n)
     }
 
-    pub async fn compute_leader_action(&self) -> Result<Vec<LeaderAction>> {
+    pub async fn compute_leader_action(
+        &self,
+        reserved: &OngoingReserved,
+    ) -> Result<Vec<LeaderAction>> {
         if !self.config.enable_leader_balance {
             return Ok(vec![]);
         }
