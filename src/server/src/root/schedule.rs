@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{collections::LinkedList, sync::Arc};
+use std::{
+    collections::{hash_map::Entry, HashMap, LinkedList},
+    sync::Arc,
+};
 
 use engula_api::server::v1::*;
 use engula_client::NodeClient;
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task};
 use tracing::{error, info, warn};
 
 use super::{
@@ -82,6 +85,136 @@ impl ReconcileScheduler {
 
     async fn is_empty(&self) -> bool {
         self.tasks.lock().await.is_empty()
+    }
+}
+
+#[derive(Default)]
+pub struct OngoingReserved {
+    node_replica: HashMap<u64, i64>,
+    group_shard: HashMap<u64, i64>,
+    node_leader: HashMap<u64, i64>,
+}
+
+impl ReconcileScheduler {
+    pub async fn ongoing(&self) -> Result<OngoingReserved> {
+        let mut reserved = OngoingReserved::default();
+        let tasks = { self.tasks.lock().await.to_owned() };
+        for task in tasks {
+            match task.task.unwrap() {
+                Task::CreateGroup(task) => {
+                    match CreateGroupTaskStep::from_i32(task.step).unwrap() {
+                        CreateGroupTaskStep::GroupCreating => {
+                            for n in task.wait_create {
+                                match reserved.node_replica.entry(n.id) {
+                                    Entry::Occupied(mut ent) => {
+                                        *ent.get_mut() += 1;
+                                    }
+                                    Entry::Vacant(ent) => {
+                                        ent.insert(1);
+                                    }
+                                }
+                            }
+                        }
+                        CreateGroupTaskStep::GroupRollbacking => {
+                            for r in task.wait_cleanup {
+                                match reserved.node_replica.entry(r.node_id) {
+                                    Entry::Occupied(mut ent) => {
+                                        *ent.get_mut() -= 1;
+                                    }
+                                    Entry::Vacant(ent) => {
+                                        ent.insert(-1);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Task::ReallocateReplica(task) => {
+                    // TODO: revise leader cnt if src is leader?
+                    match ReallocateReplicaTaskStep::from_i32(task.step).unwrap() {
+                        ReallocateReplicaTaskStep::CreatingDestReplica => {
+                            match reserved
+                                .node_replica
+                                .entry(task.dest_node.as_ref().unwrap().id)
+                            {
+                                Entry::Occupied(mut ent) => {
+                                    *ent.get_mut() += 1;
+                                }
+                                Entry::Vacant(ent) => {
+                                    ent.insert(1);
+                                }
+                            }
+                            match reserved.node_replica.entry(task.src_node) {
+                                Entry::Occupied(mut ent) => {
+                                    *ent.get_mut() -= 1;
+                                }
+                                Entry::Vacant(ent) => {
+                                    ent.insert(-1);
+                                }
+                            }
+                        }
+                        ReallocateReplicaTaskStep::AddDestLearner
+                        | ReallocateReplicaTaskStep::ReplaceDestVoter
+                        | ReallocateReplicaTaskStep::ShedSourceLeader
+                        | ReallocateReplicaTaskStep::RemoveSourceMembership => {
+                            match reserved.node_replica.entry(task.src_node) {
+                                Entry::Occupied(mut ent) => {
+                                    *ent.get_mut() -= 1;
+                                }
+                                Entry::Vacant(ent) => {
+                                    ent.insert(-1);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Task::MigrateShard(task) => {
+                    match reserved.group_shard.entry(task.dest_group) {
+                        Entry::Occupied(mut ent) => {
+                            *ent.get_mut() += 1;
+                        }
+                        Entry::Vacant(ent) => {
+                            ent.insert(1);
+                        }
+                    }
+                    match reserved.group_shard.entry(task.src_group) {
+                        Entry::Occupied(mut ent) => {
+                            *ent.get_mut() -= 1;
+                        }
+                        Entry::Vacant(ent) => {
+                            ent.insert(-1);
+                        }
+                    }
+                }
+                Task::TransferGroupLeader(_task) => {
+                    // TODO:..
+                }
+                Task::CreateCollectionShards(task) => {
+                    match CreateCollectionShardStep::from_i32(task.step).unwrap() {
+                        CreateCollectionShardStep::CollectionCreating => {
+                            for group_shards in task.wait_create {
+                                match reserved.group_shard.entry(group_shards.group) {
+                                    Entry::Occupied(mut ent) => {
+                                        *ent.get_mut() += group_shards.shards.len() as i64;
+                                    }
+                                    Entry::Vacant(ent) => {
+                                        ent.insert(group_shards.shards.len() as i64);
+                                    }
+                                }
+                            }
+                        }
+                        CreateCollectionShardStep::CollectionRollbacking => {
+                            // TODO:..
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        Ok(reserved)
     }
 }
 
@@ -179,8 +312,9 @@ impl ReconcileScheduler {
     }
 
     pub async fn comput_replica_role_action(&self) -> Result<Vec<ReplicaRoleAction>> {
+        let reserved = self.ongoing().await?;
         let mut actions = Vec::new();
-        let replica_actions = self.ctx.alloc.compute_replica_action().await?;
+        let replica_actions = self.ctx.alloc.compute_replica_action(&reserved).await?;
         actions.extend_from_slice(
             &replica_actions
                 .iter()
@@ -188,7 +322,7 @@ impl ReconcileScheduler {
                 .map(ReplicaRoleAction::Replica)
                 .collect::<Vec<_>>(),
         );
-        let leader_actions = self.ctx.alloc.compute_leader_action().await?;
+        let leader_actions = self.ctx.alloc.compute_leader_action(&reserved).await?;
         actions.extend_from_slice(
             &leader_actions
                 .iter()

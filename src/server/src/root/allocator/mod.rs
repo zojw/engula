@@ -21,7 +21,7 @@ use self::{
     policy_leader_cnt::LeaderCountPolicy, policy_replica_cnt::ReplicaCountPolicy,
     policy_shard_cnt::ShardCountPolicy,
 };
-use super::RootShared;
+use super::{schedule::OngoingReserved, RootShared};
 use crate::{bootstrap::REPLICA_PER_GROUP, Result};
 
 #[cfg(test)]
@@ -162,7 +162,10 @@ impl<T: AllocSource> Allocator<T> {
     }
 
     /// Compute replica change action.
-    pub async fn compute_replica_action(&self) -> Result<Vec<ReplicaAction>> {
+    pub async fn compute_replica_action(
+        &self,
+        reserved: &OngoingReserved,
+    ) -> Result<Vec<ReplicaAction>> {
         if !self.config.enable_replica_balance {
             return Ok(vec![]);
         }
@@ -218,7 +221,8 @@ impl<T: AllocSource> Allocator<T> {
         ShardCountPolicy::with(self.alloc_source.to_owned()).allocate_shard(n)
     }
 
-    pub async fn compute_leader_action(&self) -> Result<Vec<LeaderAction>> {
+    pub async fn compute_leader_action(&self,
+        reserved: &OngoingReserved,) -> Result<Vec<LeaderAction>> {
         if !self.config.enable_leader_balance {
             return Ok(vec![]);
         }
