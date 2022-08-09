@@ -84,6 +84,44 @@ impl ReconcileScheduler {
 }
 
 impl ReconcileScheduler {
+    fn get_needed_voter(nodes: i64) -> i64 {
+        let required_replicas = 3;
+        let mut need = required_replicas;
+        if nodes >= need {
+            return need;
+        }
+        need = nodes;
+        if need % 2 == 0 {
+            need -= 1
+        }
+        if need < 3 {
+            need = 3
+        }
+        need
+    }
+
+    fn get_needed_non_voter(voters: i64, nodes: i64) -> i64 {
+        let mut need = 3;
+        if nodes - voters < need {
+            need = nodes - voters
+        }
+        if need < 0 {
+            need = 0
+        }
+        need
+    }
+
+    pub async fn compute_replica_action(&self) -> Result<()> {
+        let gactions = self.ctx.alloc.compute_groups().await?;
+        for (_group, action) in &gactions {
+            match action {
+                GroupReplicaAction::LeaveJoint => {}
+                GroupReplicaAction::LeaveLeaner => {}
+            }
+        }
+        Ok(())
+    }
+
     pub async fn need_reconcile(&self) -> Result<bool> {
         let group_action = self.ctx.alloc.compute_group_action().await?;
         if matches!(group_action, GroupAction::Add(_)) {
@@ -373,20 +411,23 @@ impl ScheduleContext {
     )> {
         info!(task=?t.task, "handle reconcile task");
         match t.task.task.as_mut().unwrap() {
-            Task::CreateGroup(create_group) => self.handle_create_group(create_group).await,
+            Task::CreateGroup(create_group) => self.handle_create_group(create_group).await, /* ddl like */
             Task::ReallocateReplica(reallocate_replica) => {
+                // !?
                 self.handle_reallocate_replica(reallocate_replica).await
             }
-            Task::MigrateShard(migrate_shard) => self.handle_migrate_shard(migrate_shard).await,
+            Task::MigrateShard(migrate_shard) => self.handle_migrate_shard(migrate_shard).await, /* atomic */
             Task::TransferGroupLeader(transfer_leader) => {
+                // atomic
                 self.handle_transfer_leader(transfer_leader).await
             }
             Task::CreateCollectionShards(create_collection_shards) => {
+                // ddl like
                 self.handle_create_collection_shards(create_collection_shards)
                     .await
             }
-            Task::ShedLeader(shed_leader) => self.handle_shed_leader(shed_leader).await,
-            Task::ShedRoot(shed_root) => self.handle_shed_root(shed_root).await,
+            Task::ShedLeader(shed_leader) => self.handle_shed_leader(shed_leader).await, /* ddl like */
+            Task::ShedRoot(shed_root) => self.handle_shed_root(shed_root).await,         // atomic
         }
     }
 
