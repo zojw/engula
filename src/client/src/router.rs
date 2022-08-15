@@ -166,6 +166,7 @@ async fn state_main(state: Arc<Mutex<State>>, root_client: RootClient) {
 
     let mut interval = 1;
     loop {
+        info!("request watching events...");
         let cur_group_epochs = {
             let state = state.lock().unwrap();
             state
@@ -212,6 +213,7 @@ async fn watch_events(state: &Mutex<State>, mut events: Streaming<WatchResponse>
                     state.node_id_lookup.insert(node_desc.id, node_desc.addr);
                 }
                 UpdateEvent::Group(group_desc) => {
+                    info!("update route group={}, to={:?}", group_desc.id, group_desc);
                     let (id, epoch) = (group_desc.id, group_desc.epoch);
                     let (shards, replicas) = (group_desc.shards, group_desc.replicas);
 

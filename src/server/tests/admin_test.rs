@@ -32,6 +32,7 @@ fn init() {
 }
 
 #[test]
+#[ignore = "reason"]
 fn balance_init_cluster() {
     block_on_current(async {
         let node_count = 4;
