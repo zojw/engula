@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use super::scheduler::ScheduleContext;
 
+#[derive(Debug)]
 pub enum TaskState {
     Pending(Option<Duration>),
     // This task enter next step.

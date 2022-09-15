@@ -165,8 +165,22 @@ impl Replica {
             return Err(Error::GroupNotFound(self.info.group_id));
         }
 
+        if self.info.group_id == 10 {
+            info!("recieve request in group10")
+        }
+
         let _acl_guard = self.take_acl_guard(request).await;
+
+        if self.info.group_id == 10 {
+            info!("get acl")
+        }
+
         self.check_request_early(&mut exec_ctx, request)?;
+
+        if self.info.group_id == 10 {
+            info!("get check early pass")
+        }
+
         self.evaluate_command(&exec_ctx, request).await
     }
 

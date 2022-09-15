@@ -223,7 +223,7 @@ fn cure_group() {
 }
 
 #[test]
-fn move_replica() {
+fn dup_move_replica() {
     block_on_current(async {
         let mut ctx = TestContext::new("group-test--move-replica");
         ctx.disable_all_balance();
@@ -236,9 +236,13 @@ fn move_replica() {
 
         info!("issue moving replicas request");
         c.assert_group_leader(group_id).await;
+
+        let mut group = c.group(group_id);
+
         let follower = c.must_group_any_follower(group_id).await;
         let follower_id = follower.id;
-        let mut group = c.group(group_id);
+
+
         group
             .move_replicas(
                 vec![ReplicaDesc {
@@ -246,15 +250,13 @@ fn move_replica() {
                     node_id,
                     role: ReplicaRole::Voter as i32,
                 }],
-                vec![follower.clone()],
+                vec![follower.to_owned()],
             )
             .await
             .unwrap();
 
+        // tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
-        // tokio::time::sleep(Duration::from_secs(10)).await;
-
-        let follower2 = c.must_group_any_follower(group_id).await;
         group
             .move_replicas(
                 vec![ReplicaDesc {
@@ -262,10 +264,10 @@ fn move_replica() {
                     node_id,
                     role: ReplicaRole::Voter as i32,
                 }],
-                vec![follower2],
+                vec![follower.clone()],
             )
             .await
-            .unwrap();
+            .unwrap(); // this should panic with EpochNotMatch
 
         c.assert_group_not_contains_member(group_id, follower_id)
             .await;

@@ -14,6 +14,8 @@
 
 use std::collections::HashSet;
 
+use tracing::info;
+
 use super::scheduler::EventWaker;
 
 #[derive(Default)]
@@ -52,15 +54,24 @@ impl CommonEventSource {
 
     #[inline]
     pub fn fire(&mut self) {
-        self.active_tasks
-            .extend(std::mem::take(&mut self.subscribe_tasks).iter());
+        let move_tasks = std::mem::take(&mut self.subscribe_tasks);
+        if !move_tasks.is_empty() {
+            info!("fire move task: {:?}", &move_tasks);
+        }
+        self.active_tasks.extend(move_tasks.iter());
         if let Some(waker) = self.waker.take() {
             waker.wake();
+            self.waker = Some(waker);
+            info!("fire wake up...")
+        } else {
+            info!("fire wake up nothing....")
         }
     }
 
     #[inline]
     pub fn active_tasks(&mut self) -> HashSet<u64> {
-        std::mem::take(&mut self.active_tasks)
+        let active_migrate = std::mem::take(&mut self.active_tasks);
+        info!("active migrate: {:?}", active_migrate);
+        active_migrate
     }
 }

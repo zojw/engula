@@ -44,6 +44,9 @@ impl Action for AddLearners {
     async fn setup(&mut self, task_id: u64, ctx: &mut ScheduleContext<'_>) -> ActionState {
         let group_id = ctx.group_id;
         let replica_id = ctx.replica_id;
+        if group_id == 10 {
+            info!("setup add_learner, group: {group_id}");
+        }
 
         let changes = ChangeReplicas {
             changes: self.learners.iter().map(replica_as_learner).collect(),
@@ -54,12 +57,14 @@ impl Action for AddLearners {
         let exec_ctx = ExecCtx::with_epoch(ctx.replica.epoch());
         let req = Request::ChangeReplicas(cc);
         if let Err(e) = ctx.replica.execute(exec_ctx, &req).await {
-            warn!(
-                "group {group_id} replica {replica_id} task {task_id} abort adding learners: {e}"
-            );
+            if group_id == 10 {
+                warn!("group {group_id} replica {replica_id} task {task_id} abort adding learners: {e}");
+            }
             ActionState::Aborted
         } else {
-            info!("group {group_id} replica {replica_id} task {task_id} add learners success");
+            if group_id == 10 {
+                info!("group {group_id} replica {replica_id} task {task_id} add learners success");
+            }
             self.providers.descriptor.watch(task_id);
             ActionState::Done
         }
@@ -87,6 +92,8 @@ impl Action for RemoveLearners {
     async fn setup(&mut self, task_id: u64, ctx: &mut ScheduleContext<'_>) -> ActionState {
         let group_id = ctx.group_id;
         let replica_id = ctx.replica_id;
+
+        info!("setup remove_learner, group: {group_id}");
 
         let changes = ChangeReplicas {
             changes: self
@@ -131,6 +138,8 @@ impl Action for ReplaceVoters {
     async fn setup(&mut self, task_id: u64, ctx: &mut ScheduleContext<'_>) -> ActionState {
         let group_id = ctx.group_id;
         let replica_id = ctx.replica_id;
+
+        info!("setup replace_voter, group: {group_id}");
 
         let mut changes = self
             .incoming_voters

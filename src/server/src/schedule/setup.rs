@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use engula_api::server::v1::ScheduleState;
-use tracing::debug;
+use tracing::{debug, info};
 
 use super::ScheduleStateObserver;
 use crate::{
@@ -97,8 +97,9 @@ async fn scheduler_main(
             }
             scheduler.advance(current_term).await;
         }
+        info!("renew scheduler due to term change");
     }
-    debug!("group {group_id} replica {replica_id} scheduler is stopped");
+    info!("group {group_id} replica {replica_id} scheduler is stopped");
 }
 
 async fn allocate_group_tasks(scheduler: &mut Scheduler, providers: Arc<GroupProviders>) {

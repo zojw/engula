@@ -22,6 +22,7 @@ use std::{
 };
 
 use futures::Future;
+use tracing::info;
 
 use super::{
     event_source::EventSource,
@@ -150,6 +151,9 @@ impl Scheduler {
 
         let mut pending_tasks: Vec<Box<dyn Task>> = vec![];
         for task_id in self.collect_active_tasks() {
+            if self.group_id == 10 {
+                info!("advance task {task_id}, group: {}", self.group_id);
+            }
             self.advance_task(current_term, task_id, &mut pending_tasks)
                 .await;
             crate::runtime::yield_now().await;
@@ -178,7 +182,11 @@ impl Scheduler {
                     pending_tasks,
                     group_lock_table: &mut self.group_lock_table,
                 };
-                match job.task.poll(&mut ctx).await {
+                let x = job.task.poll(&mut ctx).await;
+                if self.group_id == 10 {
+                    info!("poll result: {:?}", x);
+                }
+                match x {
                     TaskState::Pending(interval) => {
                         if let Some(interval) = interval {
                             self.timer.add(task_id, Instant::now() + interval);
@@ -194,6 +202,8 @@ impl Scheduler {
                     }
                 }
             }
+
+            info!("group: {} finish task {task_id}.....", self.group_id);
 
             if let Some(schedule_state) = self.group_lock_table.take_updated_states() {
                 self.schedule_state_observer
@@ -224,6 +234,7 @@ impl Scheduler {
             active_tasks.extend(source.active_tasks().iter());
         }
         active_tasks.extend(std::mem::take(&mut self.incoming_tasks).iter());
+        info!("collect task: {:?}", active_tasks);
         active_tasks
     }
 }

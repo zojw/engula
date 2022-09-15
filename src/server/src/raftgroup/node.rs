@@ -170,6 +170,7 @@ where
             return;
         }
 
+        info!("prose conf change");
         if let Err(err) = self.raw_node.propose_conf_change(context, cc) {
             if matches!(err, raft::Error::ProposalDropped) {
                 sender
@@ -178,8 +179,10 @@ where
             } else {
                 sender.send(Err(err.into())).unwrap_or_default();
             }
+            info!("prose conf change, error");
             return;
         }
+        info!("prose conf change, done");
 
         let index = self.raw_node.raft.raft_log.last_index();
         let term = self.raw_node.raft.term;

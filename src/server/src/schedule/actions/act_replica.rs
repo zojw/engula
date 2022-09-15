@@ -68,6 +68,8 @@ impl Action for CreateReplicas {
         let group_id = ctx.group_id;
         let replica_id = ctx.replica_id;
 
+        info!("setup create_replicas, group: {group_id}");
+
         while let Some(r) = self.replicas.last() {
             match self
                 .create_replica(group_id, r, ctx.provider.as_ref())
