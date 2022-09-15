@@ -13,6 +13,8 @@
 // limitations under the License.
 mod helper;
 
+use std::time::Duration;
+
 use engula_api::server::v1::*;
 use helper::context::TestContext;
 use tracing::info;
@@ -244,7 +246,23 @@ fn move_replica() {
                     node_id,
                     role: ReplicaRole::Voter as i32,
                 }],
-                vec![follower],
+                vec![follower.clone()],
+            )
+            .await
+            .unwrap();
+
+
+        // tokio::time::sleep(Duration::from_secs(10)).await;
+
+        let follower2 = c.must_group_any_follower(group_id).await;
+        group
+            .move_replicas(
+                vec![ReplicaDesc {
+                    id: 123124,
+                    node_id,
+                    role: ReplicaRole::Voter as i32,
+                }],
+                vec![follower2],
             )
             .await
             .unwrap();

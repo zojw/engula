@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use tracing::debug;
+use tracing::{debug, info};
 
 use super::ActionTaskWithLocks;
 use crate::{
@@ -46,7 +46,23 @@ impl Task for ReplicaMigration {
     }
 
     async fn poll(&mut self, ctx: &mut ScheduleContext<'_>) -> TaskState {
+        info!("poll migrate replica task, {}, {}", ctx.group_id, ctx.replica_id,);
         if let Some(move_replicas) = self.providers.move_replicas.take() {
+            info!(
+                "group {} replica {} start moving replicas requests, incoming {:?}, outgoing {:?}",
+                ctx.group_id,
+                ctx.replica_id,
+                move_replicas
+                    .incoming_replicas
+                    .iter()
+                    .map(|v| v.id)
+                    .collect::<Vec<_>>(),
+                move_replicas
+                    .outgoing_replicas
+                    .iter()
+                    .map(|v| v.id)
+                    .collect::<Vec<_>>()
+            );
             let replicas = self.providers.descriptor.replicas();
             let mut peers = replicas.iter().map(|v| v.id).collect::<Vec<_>>();
             peers.extend(move_replicas.incoming_replicas.iter().map(|v| v.id));
@@ -94,7 +110,7 @@ impl Task for ReplicaMigration {
                     .unwrap_or_default();
             }
         }
-
+        info!("wait next migrate replica task, {}, {}", ctx.group_id, ctx.replica_id,);
         self.providers.move_replicas.watch(self.id());
         TaskState::Pending(None)
     }

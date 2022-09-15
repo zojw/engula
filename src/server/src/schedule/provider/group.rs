@@ -21,6 +21,7 @@ use std::{
 use engula_api::server::v1::*;
 use engula_client::Router;
 use futures::channel::oneshot;
+use tracing::info;
 
 use crate::{
     node::Replica,
@@ -240,6 +241,25 @@ impl MoveReplicasProvider {
                 outgoing_replicas,
                 sender,
             });
+            info!(
+                "assgin moving replicas requests, incoming {:?}, outgoing {:?}",
+                inner
+                    .duty
+                    .as_ref()
+                    .unwrap()
+                    .incoming_replicas
+                    .iter()
+                    .map(|v| v.id)
+                    .collect::<Vec<_>>(),
+                inner
+                    .duty
+                    .as_ref()
+                    .unwrap()
+                    .outgoing_replicas
+                    .iter()
+                    .map(|v| v.id)
+                    .collect::<Vec<_>>()
+            );
             inner.core.fire();
         }
 
