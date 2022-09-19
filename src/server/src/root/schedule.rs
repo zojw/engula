@@ -75,8 +75,8 @@ impl ReconcileScheduler {
 
         // 2. try leader balance for exist replica.
         let lbr = self.ctx.leader_balancer.balance_leader().await;
-        let _maybe_reallocate_nodes = match lbr {
-            Ok(nodes) => nodes,
+        match lbr {
+            Ok(()) => {}
             Err(err) => {
                 warn!(err = ?err, "balance leader meet error and retry later");
                 return interval;

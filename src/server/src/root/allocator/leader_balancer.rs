@@ -46,7 +46,7 @@ enum LeaderBalanceAction {
         leader_term: u64,
         target_replica: ReplicaDesc,
     },
-    MaybeBalanceReplica,
+    MaybeBalanceReplicas(Vec<ReplicaDesc>),
 }
 
 pub struct LeaderBalancer<T: AllocSource> {
@@ -101,9 +101,9 @@ impl<T: AllocSource> LeaderBalancer<T> {
         Ok(false)
     }
 
-    pub async fn balance_leader(&self) -> Result<Vec<u64>> {
+    pub async fn balance_leader(&self) -> Result<()> {
         if !self.config.enable_shard_balance {
-            return Ok(vec![]);
+            return Ok(());
         }
 
         self.alloc_source.refresh_all().await?;
@@ -116,7 +116,7 @@ impl<T: AllocSource> LeaderBalancer<T> {
 
         if total < group_cnt - 1.0 {
             info!("some group still have no leader, balance after all group leader avaliable, total: {total}, group: {group_cnt}");
-            return Ok(vec![]);
+            return Ok(());
         }
 
         let mut related_nodes = HashSet::new();
@@ -139,8 +139,8 @@ impl<T: AllocSource> LeaderBalancer<T> {
                     LeaderBalanceAction::AlreadyBalanced => {
                         break;
                     }
-                    LeaderBalanceAction::MaybeBalanceReplica => {
-                        maybe_move_replica_nodes.push(node.id);
+                    LeaderBalanceAction::MaybeBalanceReplicas(replicas) => {
+                        maybe_move_replica_nodes.extend_from_slice(&replicas);
                         break;
                     }
                     LeaderBalanceAction::TransferLeader {
@@ -164,6 +164,16 @@ impl<T: AllocSource> LeaderBalancer<T> {
                     }
                 }
             }
+
+            while !maybe_move_replica_nodes.is_empty() {
+                if leader_cnt <= max {
+                    break;
+                }
+
+                while let Some(r) = maybe_move_replica_nodes.pop() {
+                    
+                }
+            }
         }
 
         if !related_nodes.is_empty() {
@@ -180,7 +190,7 @@ impl<T: AllocSource> LeaderBalancer<T> {
             }
         }
 
-        Ok(maybe_move_replica_nodes)
+        Ok(())
     }
 
     fn leader_cnt(&self, ctx: &BalanceTickContext, node: &NodeDesc) -> f64 {
@@ -197,7 +207,7 @@ impl<T: AllocSource> LeaderBalancer<T> {
     ) -> Result<LeaderBalanceAction> {
         let groups = self.alloc_source.groups();
 
-        let mut not_suitable_target = false;
+        let mut target_not_exist_cannot_move = Vec::new();
         let src_replicas = self.alloc_source.node_replicas(&src_node.id);
         for (leader_replica, group_id) in &src_replicas {
             if *group_id == ROOT_GROUP_ID {
@@ -229,7 +239,7 @@ impl<T: AllocSource> LeaderBalancer<T> {
                     })
                     .collect::<Vec<_>>();
                 if repl_cands.is_empty() {
-                    not_suitable_target = true;
+                    target_not_exist_cannot_move.push(leader_replica.to_owned());
                     continue;
                 }
                 let mut rng = thread_rng();
@@ -243,8 +253,8 @@ impl<T: AllocSource> LeaderBalancer<T> {
                 });
             }
         }
-        Ok(if not_suitable_target {
-            LeaderBalanceAction::MaybeBalanceReplica
+        Ok(if !target_not_exist_cannot_move.is_empty() {
+            LeaderBalanceAction::MaybeBalanceReplicas(target_not_exist_cannot_move)
         } else {
             LeaderBalanceAction::AlreadyBalanced
         })
