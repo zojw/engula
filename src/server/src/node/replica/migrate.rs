@@ -29,8 +29,23 @@ impl Replica {
         last_key: &[u8],
         chunk_size: usize,
     ) -> Result<ShardChunk> {
+        info!(
+            "try to acl_guart for fetch chunk, group: {}, replica: {}, shard: {}",
+            self.info.group_id, self.info.replica_id, shard_id
+        );
         let _acl_guard = self.take_read_acl_guard().await;
-        self.check_migrating_request_early(shard_id)?;
+        info!(
+            "take acl_guart for fetch chunk, group: {}, replica: {}, shard: {}",
+            self.info.group_id, self.info.replica_id, shard_id
+        );
+        let rs = self.check_migrating_request_early(shard_id);
+        if let Err(err) = rs {
+            info!(
+                "release acl_guart for fetch chunk for check error1, group: {}, replica: {}, shard: {}, {:?}",
+                self.info.group_id, self.info.replica_id, shard_id, err,
+            );
+            return Err(err);
+        }
 
         let mut kvs = vec![];
         let mut size = 0;
@@ -44,10 +59,24 @@ impl Replica {
         };
         let mut snapshot = self.group_engine.snapshot(shard_id, snapshot_mode)?;
         for key_iter in snapshot.iter() {
-            let mut key_iter = key_iter?;
+            if let Err(err) = key_iter {
+                info!(
+                    "release acl_guart for fetch chunk for check error2, group: {}, replica: {}, shard: {}, {:?}",
+                    self.info.group_id, self.info.replica_id, shard_id, err,
+                );
+                return Err(err);
+            }
+            let mut key_iter = key_iter.unwrap();
             // NOTICE: Only migrate the first version.
             if let Some(entry) = key_iter.next() {
-                let entry = entry?;
+                if let Err(err) = entry {
+                    info!(
+                        "release acl_guart for fetch chunk for check error3, group: {}, replica: {}, shard: {}, {:?}",
+                        self.info.group_id, self.info.replica_id, shard_id, err,
+                    );
+                    return Err(err);
+                }
+                let entry = entry.unwrap();
                 if entry.user_key() == last_key {
                     continue;
                 }
@@ -71,6 +100,11 @@ impl Replica {
             }
         }
 
+        info!(
+            "release acl_guart for fetch chunk, group: {}, replica: {}, shard: {}",
+            self.info.group_id, self.info.replica_id, shard_id
+        );
+
         Ok(ShardChunk { data: kvs })
     }
 
@@ -79,8 +113,23 @@ impl Replica {
             return Ok(());
         }
 
+        info!(
+            "try acl_guart for ingest, group: {}, replica: {}, shard: {}, forwarded: {forwarded}",
+            self.info.group_id, self.info.replica_id, shard_id
+        );
         let _acl_guard = self.take_read_acl_guard().await;
-        self.check_migrating_request_early(shard_id)?;
+        info!(
+            "take acl_guart for ingest, group: {}, replica: {}, shard: {}, forwarded: {forwarded}",
+            self.info.group_id, self.info.replica_id, shard_id
+        );
+        let rs = self.check_migrating_request_early(shard_id);
+        if rs.is_err() {
+            info!(
+                "release acl_guart for ingest error, group: {}, replica: {}, shard: {}, err: {:?}",
+                self.info.group_id, self.info.replica_id, shard_id, rs
+            );
+        }
+        rs?;
 
         let mut wb = WriteBatch::default();
         for data in &chunk.data {
@@ -102,7 +151,23 @@ impl Replica {
             }),
             op: sync_op,
         };
-        self.raft_node.clone().propose(eval_result).await?;
+        info!(
+            "hoding acl_guart for ingest, group: {}, replica: {}, shard: {}",
+            self.info.group_id, self.info.replica_id, shard_id
+        );
+        let rs = self.raft_node.clone().propose2(eval_result).await;
+        if rs.is_err() {
+            info!(
+                "release acl_guart for ingest propose error, group: {}, replica: {}, shard: {}, err: {:?}",
+                self.info.group_id, self.info.replica_id, shard_id, rs
+            );
+        }
+        rs?;
+
+        info!(
+            "release acl_guart for ingest, group: {}, replica: {}, shard: {}",
+            self.info.group_id, self.info.replica_id, shard_id
+        );
 
         Ok(())
     }
@@ -112,7 +177,15 @@ impl Replica {
             return Ok(());
         }
 
+        info!(
+            "try acl_guart for delete chunk, group: {}, replica: {}, shard: {}",
+            self.info.group_id, self.info.replica_id, shard_id
+        );
         let _acl_guard = self.take_read_acl_guard().await;
+        info!(
+            "take acl_guart for delete chunk, group: {}, replica: {}, shard: {}",
+            self.info.group_id, self.info.replica_id, shard_id
+        );
         self.check_migrating_request_early(shard_id)?;
 
         let mut wb = WriteBatch::default();
@@ -127,6 +200,10 @@ impl Replica {
             op: None,
         };
         self.raft_node.clone().propose(eval_result).await?;
+        info!(
+            "release acl_guart for delete chunk, group: {}, replica: {}, shard: {}",
+            self.info.group_id, self.info.replica_id, shard_id
+        );
 
         Ok(())
     }
@@ -161,14 +238,43 @@ impl Replica {
         desc: &MigrationDesc,
         event: MigrationEvent,
     ) -> Result<()> {
-        debug!(replica = self.info.replica_id,
+        info!(replica = self.info.replica_id,
             group = self.info.group_id,
             %desc,
             ?event,
             "update migration state");
 
+        info!(
+            "try acl_guart for update_migrate_state, group: {}, replica: {}, shard: {}, event: {:?}",
+            self.info.group_id,
+            self.info.replica_id,
+            desc.shard_desc.as_ref().unwrap().id,
+            event,
+        );
         let _guard = self.take_write_acl_guard().await;
-        if !self.check_migration_state_update_early(desc, event)? {
+        info!(
+            "take acl_guart for update_migrate_state, group: {}, replica: {}, shard: {}",
+            self.info.group_id,
+            self.info.replica_id,
+            desc.shard_desc.as_ref().unwrap().id
+        );
+        let rs = self.check_migration_state_update_early(desc, event);
+        if let Err(err) = rs {
+            info!(
+                "release acl_guart for update_migrate_state for check error, group: {}, replica: {}, shard: {}",
+                self.info.group_id,
+                self.info.replica_id,
+                desc.shard_desc.as_ref().unwrap().id,
+            );
+            return Err(err);
+        }
+        if !rs.unwrap() {
+            info!(
+                "release acl_guart for update_migrate_state, group: {}, replica: {}, shard: {}",
+                self.info.group_id,
+                self.info.replica_id,
+                desc.shard_desc.as_ref().unwrap().id
+            );
             return Ok(());
         }
 
@@ -178,6 +284,12 @@ impl Replica {
             op: Some(sync_op),
         };
         self.raft_node.clone().propose(eval_result).await?;
+        info!(
+            "release acl_guart for update_migrate_state, group: {}, replica: {}, shard: {}",
+            self.info.group_id,
+            self.info.replica_id,
+            desc.shard_desc.as_ref().unwrap().id
+        );
 
         Ok(())
     }
@@ -185,6 +297,9 @@ impl Replica {
     pub fn check_migrating_request_early(&self, shard_id: u64) -> Result<()> {
         let lease_state = self.lease_state.lock().unwrap();
         if !lease_state.is_ready_for_serving() {
+            if lease_state.is_raft_leader() && !lease_state.is_log_term_matched() {
+                tracing::warn!("check leader failure due to term not match, group: {}, replica: {}, term: {} - {}", self.info.group_id, self.info.replica_id, lease_state.applied_term, lease_state.replica_state.term);
+            }
             Err(Error::NotLeader(
                 self.info.group_id,
                 lease_state.applied_term,

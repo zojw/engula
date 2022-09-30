@@ -30,12 +30,20 @@ impl<T: AllocSource> ShardCountPolicy<T> {
     }
 
     pub fn allocate_shard(&self, n: usize) -> Result<Vec<GroupDesc>> {
-        let mut groups = self.current_user_groups();
+        let groups = self.current_user_groups();
         if groups.is_empty() {
             return Ok(vec![]);
         }
-        groups.sort_by(|g1, g2| g1.shards.len().cmp(&g2.shards.len()));
-        Ok(groups.into_iter().take(n).collect())
+        let first_group = groups
+            .iter()
+            .find(|g| g.id == 1)
+            .as_ref()
+            .unwrap()
+            .to_owned()
+            .to_owned();
+        Ok(vec![first_group])
+        // groups.sort_by(|g1, g2| g1.shards.len().cmp(&g2.shards.len()));
+        // Ok(groups.into_iter().take(n).collect())
     }
 
     pub fn compute_balance(&self) -> Result<Vec<ShardAction>> {

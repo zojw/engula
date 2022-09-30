@@ -165,6 +165,16 @@ impl Replica {
     }
 }
 
+trait AnyExt {
+    fn type_name(&self) -> &'static str;
+}
+
+impl<T> AnyExt for T {
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<T>()
+    }
+}
+
 impl Replica {
     /// Execute group request and fill response.
     pub(crate) async fn execute(
@@ -176,9 +186,16 @@ impl Replica {
             return Err(Error::GroupNotFound(self.info.group_id));
         }
 
+        let req_type = request.type_name();
+        let replica_id = self.info.replica_id;
+
+        info!("replica: {replica_id}, try take acl_guart receive replica request: {req_type}",);
         let _acl_guard = self.take_acl_guard(request).await;
+        info!("replica: {replica_id}, get acl_guart replica request: {req_type}",);
         self.check_request_early(exec_ctx, request)?;
-        self.evaluate_command(exec_ctx, request).await
+        let r = self.evaluate_command(exec_ctx, request).await;
+        info!("replica: {replica_id}, release acl_guart replica request: {req_type}",);
+        r
     }
 
     /// Execute group request. instead of be blocked, it will returns `Error::ServiceIsBusy` if
@@ -192,11 +209,18 @@ impl Replica {
             return Err(Error::GroupNotFound(self.info.group_id));
         }
 
+        let req_type = request.type_name();
+        let replica_id = self.info.replica_id;
+
+        info!("replica: {replica_id}, try take acl_guart receive replica request(try): {req_type}");
         let _acl_guard = self
             .try_take_acl_guard(request)
             .ok_or(Error::ServiceIsBusy(BusyReason::AclGuard))?;
+        info!("replica: {replica_id}, get acl_guart replica request(try): {req_type}");
         self.check_request_early(&mut exec_ctx, request)?;
-        self.evaluate_command(&exec_ctx, request).await
+        let r = self.evaluate_command(&exec_ctx, request).await;
+        info!("replica: {replica_id}, release acl_guart replica request(try): {req_type}");
+        r
     }
 
     pub async fn on_leader(&self, source: &'static str, immediate: bool) -> Result<Option<u64>> {
@@ -208,7 +232,15 @@ impl Replica {
 
         poll_fn(|ctx| {
             let mut lease_state = self.lease_state.lock().unwrap();
-            if lease_state.is_ready_for_serving() {
+            let has_lease = lease_state.is_ready_for_serving();
+            if !has_lease && source == "root" {
+                tracing::warn!(
+                    "drop root leader: leader: {}, catch up: {}",
+                    lease_state.is_raft_leader(),
+                    lease_state.is_log_term_matched()
+                );
+            }
+            if has_lease {
                 Poll::Ready(Ok(Some(lease_state.replica_state.term)))
             } else if immediate {
                 Poll::Ready(Ok(None))
@@ -409,6 +441,7 @@ impl Replica {
             Err(Error::EpochNotMatch(lease_state.descriptor.clone()))
         } else if lease_state.is_migrating() && matches!(req, Request::AcceptShard(_)) {
             // At the same time, there can only be one migration task.
+            tracing::warn!("migrate inprogress: {:?}", lease_state.migration_state);
             Err(Error::ServiceIsBusy(BusyReason::Migrating))
         } else {
             // If the current replica is the leader and has applied data in the current term,

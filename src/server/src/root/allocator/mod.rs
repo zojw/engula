@@ -209,6 +209,7 @@ impl<T: AllocSource> Allocator<T> {
 
     pub async fn compute_shard_action(&self) -> Result<Vec<ShardAction>> {
         if !self.config.enable_shard_balance {
+        // if false {
             return Ok(vec![]);
         }
 

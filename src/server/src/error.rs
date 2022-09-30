@@ -160,7 +160,7 @@ impl From<Error> for tonic::Status {
             ),
 
             Error::Forward(_) => panic!("Forward only used inside node"),
-            Error::ServiceIsBusy(_) => panic!("ServiceIsBusy only used inside node"),
+            Error::ServiceIsBusy(m) => panic!("ServiceIsBusy only used inside node: {m}"),
             Error::GroupNotReady(_) => panic!("GroupNotReady only used inside node"),
 
             err @ (Error::Canceled
@@ -216,7 +216,7 @@ impl From<Error> for engula_api::server::v1::Error {
             Error::DeadlineExceeded(msg) => v1::Error::status(Code::DeadlineExceeded.into(), msg),
 
             Error::Forward(_) => panic!("Forward only used inside node"),
-            Error::ServiceIsBusy(_) => panic!("ServiceIsBusy only used inside node"),
+            Error::ServiceIsBusy(m) => panic!("ServiceIsBusy only used inside node: {m}"),
             Error::GroupNotReady(_) => panic!("GroupNotReady only used inside node"),
             Error::AbortScheduleTask(_) => panic!("AbortScheduleTask only used inside node"),
             Error::AlreadyExists(msg) => v1::Error::status(Code::AlreadyExists.into(), msg),

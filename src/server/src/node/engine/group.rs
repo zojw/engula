@@ -63,6 +63,8 @@ pub struct GroupEngine
 where
     Self: Send,
 {
+    group_id: u64,
+    replica_id: u64,
     cfg: EngineConfig,
     name: String,
     raw_db: Arc<RawDb>,
@@ -173,6 +175,8 @@ impl GroupEngine {
         let cf_handle = raw_db
             .cf_handle(&name)
             .expect("cf must exists because it just created");
+
+        tracing::info!("group: {group_id}, replica: {replica_id} create with migrate_state: None");
         let engine = GroupEngine {
             cfg: cfg.clone(),
             name,
@@ -182,6 +186,8 @@ impl GroupEngine {
                 shard_descs: Default::default(),
                 migration_state: None,
             })),
+            group_id,
+            replica_id,
         };
 
         // The group descriptor should be persisted into disk.
@@ -221,6 +227,10 @@ impl GroupEngine {
                 .entry(shard_desc.id)
                 .or_insert_with(|| shard_desc.clone());
         }
+        tracing::info!(
+            "group: {group_id}, replica: {replica_id} open with migrate_state: {:?}",
+            migration_state
+        );
         let core = GroupEngineCore {
             migration_state,
             group_desc,
@@ -232,6 +242,8 @@ impl GroupEngine {
             name,
             raw_db: raw_db.clone(),
             core: Arc::new(RwLock::new(core)),
+            group_id,
+            replica_id,
         }))
     }
 
@@ -459,11 +471,19 @@ impl GroupEngine {
 
         // TODO(walter) remove shard desc if migration task is aborted.
         if let Some(migration_state) = migration_state {
+            let (group_id, replica_id) = (self.group_id, self.replica_id);
             if migration_state.step == MigrationStep::Finished as i32
                 || migration_state.step == MigrationStep::Aborted as i32
             {
+                tracing::info!(
+                    "group: {group_id}, replica: {replica_id} update with migrate_state: None",
+                );
                 core.migration_state = None;
             } else {
+                tracing::info!(
+                    "group: {group_id}, replica: {replica_id} update with migrate_state: {:?}",
+                    migration_state
+                );
                 core.migration_state = Some(migration_state);
             }
         }

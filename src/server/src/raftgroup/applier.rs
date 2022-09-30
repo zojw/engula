@@ -47,6 +47,7 @@ pub(super) struct ReplicaCache {
 /// Applier records the context of requests.
 pub struct Applier<M: StateMachine> {
     group_id: u64,
+    replica_id: u64,
 
     proposal_queue: VecDeque<ProposalContext>,
 
@@ -61,9 +62,10 @@ pub struct Applier<M: StateMachine> {
 }
 
 impl<M: StateMachine> Applier<M> {
-    pub fn new(group_id: u64, state_machine: M) -> Self {
+    pub fn new(group_id: u64, replica_id: u64, state_machine: M) -> Self {
         Applier {
             group_id,
+            replica_id,
             proposal_queue: VecDeque::default(),
             next_read_state_index: 0,
             read_requests: HashMap::default(),
@@ -157,6 +159,13 @@ impl<M: StateMachine> Applier<M> {
         record_latency!(&RAFTGROUP_WORKER_APPLY_DURATION_SECONDS);
         RAFTGROUP_WORKER_APPLY_ENTRIES_SIZE.observe(committed_entries.len() as f64);
 
+        let group = self.group_id;
+        let replica = self.replica_id;
+        tracing::trace!(
+            "group: {group}, replica: {replica}, start handle apply entries, len: {}",
+            committed_entries.len()
+        );
+
         perf_ctx.num_committed = committed_entries.len();
         record_perf_point(&mut perf_ctx.start_plug);
         self.state_machine.start_plug().expect("start_plug");
@@ -183,13 +192,23 @@ impl<M: StateMachine> Applier<M> {
             }
         }
 
+        tracing::trace!("group: {group}, replica: {replica}, exec handle apply entries");
+
         record_perf_point(&mut perf_ctx.finish_plug);
         self.state_machine.finish_plug().expect("finish_plug");
 
+        tracing::trace!(
+            "group: {group}, replica: {replica}, finish handle apply entries, {}",
+            self.last_applied_index
+        );
+
         record_perf_point(&mut perf_ctx.response_proposals);
-        entry_ids
-            .into_iter()
-            .for_each(|EntryId { index, term }| self.response_proposal(index, term));
+        entry_ids.into_iter().for_each(|EntryId { index, term }| {
+            tracing::trace!(
+                "group: {group}, replica: {replica}, response handle apply entries, {index}-{term}"
+            );
+            self.response_proposal(index, term)
+        });
 
         // Since the `last_applied_index` updated, try advance cached read states.
         self.response_cached_read_states();
@@ -260,6 +279,11 @@ impl<M: StateMachine> Applier<M> {
                     .send(Err(Error::NotLeader(self.group_id, term, None)))
                     .unwrap_or_default();
             }
+        } else {
+            tracing::info!(
+                "replica: {}, response proposal missed, {index}-{term}",
+                self.replica_id
+            )
         }
     }
 

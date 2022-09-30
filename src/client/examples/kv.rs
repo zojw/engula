@@ -22,14 +22,13 @@ async fn main() -> Result<(), AppError> {
     let client = EngulaClient::new(ClientOptions::default(), addrs).await?;
     let db = client.create_database("test_db".to_string()).await?;
     let co = db
-        .create_collection("test_co".to_string(), Some(Partition::Hash { slots: 3 }))
+        .create_collection("test_co".to_string(), Some(Partition::Hash { slots: 30 }))
         .await?;
 
-    let k = "book_name".as_bytes().to_vec();
-    let v = "rust_in_actions".as_bytes().to_vec();
-    co.put(k.clone(), v).await?;
-    let r = co.get(k).await?;
-    let r = r.map(String::from_utf8);
-    println!("{:?}", r);
+    for i in 1..300000 {
+        let k = format!("book_name{i}").as_bytes().to_vec();
+        let v = "rust_in_actions".as_bytes().to_vec();
+        co.put(k.clone(), v).await?;
+    }
     Ok(())
 }

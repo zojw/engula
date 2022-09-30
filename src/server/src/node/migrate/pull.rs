@@ -20,7 +20,7 @@ use std::{
 use engula_api::server::v1::*;
 use engula_client::MigrateClient;
 use futures::StreamExt;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     node::{metrics::*, Replica},
@@ -34,13 +34,17 @@ pub async fn pull_shard(
     last_migrated_key: Vec<u8>,
 ) -> Result<()> {
     record_latency!(take_pull_shard_metrics());
+    info!("start pull shard: {:?}", desc);
     let shard_id = desc.get_shard_id();
     let mut streaming = client.retryable_pull(shard_id, last_migrated_key).await?;
     while let Some(shard_chunk) = streaming.next().await {
         let shard_chunk = shard_chunk?;
         NODE_INGEST_CHUNK_TOTAL.inc();
+        info!("start ingest one chunk for: {:?}", desc);
         replica.ingest(shard_id, shard_chunk, false).await?;
+        info!("finish ingest one chunk for: {:?}", desc);
     }
+    info!("finish pull shard: {:?}", desc);
     Ok(())
 }
 

@@ -143,6 +143,7 @@ impl node_server::Node for Server {
         request: Request<MigrateRequest>,
     ) -> Result<Response<MigrateResponse>, Status> {
         record_latency!(take_migrate_request_metrics());
+        tracing::info!("recieve migrate......");
         let req = request.into_inner();
         let resp = self.node.migrate(req).await?;
         Ok(Response::new(resp))
@@ -154,6 +155,7 @@ impl node_server::Node for Server {
     ) -> Result<Response<Self::PullStream>, Status> {
         record_latency!(take_pull_request_metrics());
         let request = request.into_inner();
+        tracing::info!("receive pull rpc: {:?}", request);
         let stream = self.node.pull_shard_chunks(request).await?;
         Ok(Response::new(stream))
     }

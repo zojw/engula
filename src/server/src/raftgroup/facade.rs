@@ -36,13 +36,15 @@ where
     Self: Send,
 {
     request_sender: mpsc::Sender<Request>,
+    replica_id: u64,
 }
 
 impl RaftNodeFacade {
     /// Open the existed raft node.
-    pub fn open(sender: mpsc::Sender<Request>) -> Self {
+    pub fn open(sender: mpsc::Sender<Request>, replica_id: u64) -> Self {
         RaftNodeFacade {
             request_sender: sender,
+            replica_id,
         }
     }
 
@@ -60,7 +62,25 @@ impl RaftNodeFacade {
             eval_result,
             start: start_at,
             sender,
+            ingest_dat: false,
         };
+
+        self.send(request)?;
+        take_propose_metrics(start_at, receiver.await?)
+    }
+
+    pub async fn propose2(&mut self, eval_result: EvalResult) -> Result<()> {
+        let start_at = Instant::now();
+        let (sender, receiver) = oneshot::channel();
+
+        let request = Request::Propose {
+            eval_result,
+            start: start_at,
+            sender,
+            ingest_dat: true,
+        };
+
+        tracing::info!("propose ingest to replica: {}", self.replica_id);
 
         self.send(request)?;
         take_propose_metrics(start_at, receiver.await?)

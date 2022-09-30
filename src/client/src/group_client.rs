@@ -29,8 +29,8 @@ use tonic::{Code, Status};
 use tracing::{debug, trace, warn};
 
 use crate::{
-    metrics::*, node_client::RpcTimeout, record_latency_opt, ConnManager, Error, NodeClient,
-    RequestBatchBuilder, Result, Router, RouterGroupState,
+    metrics::*, node_client::RpcTimeout, record_latency_opt, ConnManager, Error, MigrateClient,
+    NodeClient, RequestBatchBuilder, Result, Router, RouterGroupState,
 };
 
 pub struct RetryableShardChunkStreaming {
@@ -122,6 +122,55 @@ impl GroupClient {
         O: Future<Output = Result<V, tonic::Status>>,
     {
         self.invoke_with_opt(op, InvokeOpt::default()).await
+    }
+
+    async fn invoke_with_opt2<F, O, V>(&mut self, op: F, opt: InvokeOpt<'_>) -> Result<V>
+    where
+        F: Fn(InvokeContext, NodeClient) -> O,
+        O: Future<Output = std::result::Result<V, tonic::Status>>,
+    {
+        // Initial lazy connection
+        let group_id = self.group_id;
+        if self.epoch == 0 {
+            self.initial_group_state()?;
+            tracing::warn!("group {group_id} init success");
+        }
+        self.next_access_index = 0;
+
+        let deadline = self
+            .timeout
+            .take()
+            .map(|duration| Instant::now() + duration);
+        let mut index = 0;
+        while let Some((node_id, client)) = self.recommend_client() {
+            tracing::warn!(
+                "group {group_id} issue rpc request with index {index} to node {node_id}"
+            );
+            index += 1;
+            let ctx = InvokeContext {
+                group_id,
+                epoch: self.epoch,
+                node_id,
+                timeout: self.timeout,
+            };
+            match op(ctx, client).await {
+                Err(status) => {
+                    tracing::warn!("group {group_id} issue rpc request with index {index} to node {node_id} meet err: {:?}", status);
+                    self.apply_status(status, &opt)?;
+                    tracing::warn!("group {group_id} issue rpc request with index {index} to node {node_id} meet err but try next");
+                }
+                Ok(s) => return Ok(s),
+            };
+            if deadline
+                .map(|v| v.elapsed() > Duration::ZERO)
+                .unwrap_or_default()
+            {
+                return Err(Error::DeadlineExceeded("issue rpc".to_owned()));
+            }
+            GROUP_CLIENT_RETRY_TOTAL.inc();
+        }
+
+        Err(Error::GroupNotAccessable(group_id))
     }
 
     async fn invoke_with_opt<F, O, V>(&mut self, op: F, opt: InvokeOpt<'_>) -> Result<V>
@@ -295,7 +344,7 @@ impl GroupClient {
     }
 
     fn apply_not_leader_status(&mut self, term: u64, leader_desc: Option<ReplicaDesc>) {
-        debug!(
+        tracing::warn!(
             "group {} issue rpc to {}: not leader, new leader {:?} term {term}, local state {:?}",
             self.group_id,
             self.access_node_id.unwrap_or_default(),
@@ -662,19 +711,29 @@ impl GroupClient {
         last_key: &[u8],
     ) -> Result<tonic::Streaming<ShardChunk>> {
         let group_id = self.group_id;
-        let op = |_: InvokeContext, client: NodeClient| {
+        let op = |ctx: InvokeContext, client: NodeClient| {
             let request = PullRequest {
                 group_id,
                 shard_id,
                 last_key: last_key.to_owned(),
             };
-            async move { client.pull(request).await }
+            tracing::info!(
+                "invoke pull 1 {group_id} shard: {shard_id}, node: {}",
+                ctx.node_id
+            );
+            async move {
+                tracing::info!(
+                    "invoke pull 2 {group_id} shard: {shard_id}, node: {}",
+                    ctx.node_id
+                );
+                client.pull(request).await
+            }
         };
         let opt = InvokeOpt {
             ignore_transport_error: true,
             ..Default::default()
         };
-        self.invoke_with_opt(op, opt).await
+        self.invoke_with_opt2(op, opt).await
     }
 }
 
@@ -700,6 +759,7 @@ fn retryable_chunk_stream(
 ) -> impl futures::Stream<Item = Result<ShardChunk>> {
     async_stream::try_stream! {
         loop {
+            tracing::warn!("fetch chunk invoke stream next");
             match streaming.next().await {
                 None => break,
                 Some(Ok(item)) => {
@@ -708,6 +768,7 @@ fn retryable_chunk_stream(
                     yield item;
                 }
                 Some(Err(status)) => {
+                    tracing::warn!("fetch chunk for stream with error: {:?}", status);
                     if let Err(e) = client.apply_status(status, &InvokeOpt::default()) {
                         warn!("shard {shard_id} fetch shard meet unretryable error: {e:?}");
                         // TODO(walter) we can replace it with `Result::inspect_err` once `result_option_inspect` is stabled.
@@ -725,7 +786,7 @@ fn retryable_chunk_stream(
                             unreachable!();
                         },
                     }
-                    debug!("recreated shard {shard_id} fetch shard stream");
+                    tracing::warn!("recreated fetch chunk stream shard {shard_id} fetch shard stream");
                 }
             }
         }

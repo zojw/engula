@@ -57,6 +57,7 @@ pub enum Request {
         eval_result: EvalResult,
         start: Instant,
         sender: oneshot::Sender<Result<()>>,
+        ingest_dat: bool,
     },
     CreateSnapshotFinished,
     InstallSnapshot {
@@ -277,11 +278,22 @@ where
         let mut interval = interval(Duration::from_millis(self.cfg.tick_interval_ms));
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         while !self.request_receiver.is_terminated() {
+            tracing::trace!(
+                "group {} replica {} raft worker start tick",
+                self.group_id,
+                self.desc.id
+            );
             let mut ctx = WorkerContext::default();
             self.maintenance(&mut ctx, &mut interval).await?;
             self.consume_requests(&mut ctx)?;
             self.dispatch(&mut ctx, &mut log_writer).await?;
             self.finish_round(ctx);
+            tracing::trace!(
+                "group {} replica {} raft worker finish tick",
+                self.group_id,
+                self.desc.id
+            );
+            crate::runtime::yield_now().await;
         }
 
         debug!(
@@ -400,13 +412,35 @@ where
     }
 
     fn handle_request(&mut self, ctx: &mut WorkerContext, request: Request) -> Result<()> {
+        let replica = self.desc.id;
+        let typ = match &request {
+            Request::Read { policy, sender } => "read".to_owned(),
+            Request::Propose {
+                eval_result,
+                start,
+                sender,
+                ingest_dat,
+            } => format!("propose-{ingest_dat}"),
+            Request::CreateSnapshotFinished => "create snap".to_owned(),
+            Request::InstallSnapshot { msg } => "install snap".to_owned(),
+            Request::RejectSnapshot { msg } => "reject snap".to_owned(),
+            Request::ChangeConfig { change, sender } => "change conf".to_owned(),
+            Request::Transfer { transferee } => "tranfer leader".to_owned(),
+            Request::Message(_) => "message?".to_owned(),
+            Request::Unreachable { target_id } => "unreach".to_owned(),
+            Request::State(_) => "state".to_owned(),
+            Request::Monitor(_) => "monitor".to_owned(),
+            Request::Start => "start".to_owned(),
+        };
+        tracing::trace!("replica: {replica}, raftworker: start handle request {typ}");
         ctx.perf_ctx.num_requests += 1;
         match request {
             Request::Propose {
                 eval_result,
                 start,
                 sender,
-            } => self.handle_proposal(ctx, eval_result, start, sender),
+                ingest_dat,
+            } => self.handle_proposal(ctx, eval_result, start, sender, ingest_dat),
             Request::Read { policy, sender } => self.handle_read(policy, sender),
             Request::ChangeConfig { change, sender } => self.handle_conf_change(change, sender),
             Request::CreateSnapshotFinished => {
@@ -458,6 +492,7 @@ where
             }
             Request::Start => {}
         }
+        tracing::trace!("replica: {replica}, raftworker: finish handle request {typ}");
         Ok(())
     }
 
@@ -491,13 +526,14 @@ where
         eval_result: EvalResult,
         start: Instant,
         sender: oneshot::Sender<Result<()>>,
+        ingest: bool,
     ) {
         use prost::Message;
 
         let data = eval_result.encode_to_vec();
         ctx.accumulated_bytes += data.len();
         ctx.perf_ctx.num_proposal += 1;
-        self.raft_node.propose(data, vec![], sender);
+        self.raft_node.propose(data, vec![], sender, ingest);
         RAFTGROUP_WORKER_REQUEST_IN_QUEUE_DURATION_SECONDS.observe(elapsed_seconds(start));
     }
 

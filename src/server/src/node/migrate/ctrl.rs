@@ -145,12 +145,15 @@ impl MigrationCoordinator {
         if self.is_dest_group() {
             match step {
                 MigrationStep::Prepare => {
+                    info!("dest:prepare: {:?}", state);
                     self.setup_source_group().await;
                 }
                 MigrationStep::Migrating => {
+                    info!("dest:migrating: {:?}", state);
                     self.pull(state.last_migrated_key).await;
                 }
                 MigrationStep::Migrated => {
+                    info!("dest:migrated: {:?}", state);
                     // Send finish migration request to source group.
                     self.commit_source_group().await;
                 }
@@ -159,6 +162,7 @@ impl MigrationCoordinator {
         } else {
             match step {
                 MigrationStep::Migrated => {
+                    info!("src:cleanup: {:?}", state);
                     self.clean_orphan_shard().await;
                 }
                 MigrationStep::Prepare | MigrationStep::Migrating => {}
@@ -168,7 +172,7 @@ impl MigrationCoordinator {
     }
 
     async fn setup_source_group(&mut self) {
-        debug!(
+        info!(
             replica = self.replica_id,
             group = self.group_id,
             desc = %self.desc,

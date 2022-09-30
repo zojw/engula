@@ -116,6 +116,7 @@ impl GroupStateMachine {
     }
 
     fn apply_proposal(&mut self, eval_result: EvalResult) -> Result<()> {
+        let has_data = eval_result.batch.is_some();
         if let Some(wb) = eval_result.batch {
             self.plugged_write_batches.push(WriteBatch::new(&wb.data));
         }
@@ -134,7 +135,7 @@ impl GroupStateMachine {
                 desc.shards.push(shard);
             }
             if let Some(m) = op.migration {
-                self.apply_migration_event(m, &mut desc);
+                self.apply_migration_event(m, &mut desc, has_data);
             }
 
             // Any sync_op will update group desc.
@@ -144,15 +145,32 @@ impl GroupStateMachine {
         Ok(())
     }
 
-    fn apply_migration_event(&mut self, migration: Migration, group_desc: &mut GroupDesc) {
+    fn apply_migration_event(
+        &mut self,
+        migration: Migration,
+        group_desc: &mut GroupDesc,
+        with_data: bool,
+    ) {
         let event = MigrationEvent::from_i32(migration.event).expect("unknown migration event");
+        let mut ddesc = None;
         if let Some(desc) = migration.migration_desc.as_ref() {
             info!(
                 replica = self.info.replica_id,
                 group = self.info.group_id,
                 %desc,
                 ?event,
-                "apply migration event"
+                with_data,
+                "apply miration event"
+            );
+            ddesc = Some(desc.to_owned());
+        }
+        if with_data && matches!(event, migration::Event::Ingest) {
+            info!(
+                replica = self.info.replica_id,
+                group = self.info.group_id,
+                ?event,
+                with_data,
+                "apply ingest event"
             );
         }
 
@@ -184,6 +202,15 @@ impl GroupStateMachine {
                 if state.step == MigrationStep::Prepare as i32 {
                     state.step = MigrationStep::Migrating as i32;
                     self.migration_state_updated = true;
+                }
+
+                if state.step != MigrationStep::Migrating as i32 {
+                    panic!(
+                        "miss match step: {:?}, g: {}, r: {}",
+                        MigrationStep::from_i32(state.step).unwrap(),
+                        self.info.group_id,
+                        self.info.replica_id
+                    )
                 }
 
                 debug_assert!(state.step == MigrationStep::Migrating as i32);
@@ -220,6 +247,25 @@ impl GroupStateMachine {
                 self.plugged_write_states.migration_state = Some(state);
                 self.migration_state_updated = true;
             }
+        }
+        if let Some(desc) = ddesc {
+            info!(
+                replica = self.info.replica_id,
+                group = self.info.group_id,
+                %desc,
+                ?event,
+                with_data,
+                "finish apply miration event"
+            );
+        }
+        if with_data && matches!(event, migration::Event::Ingest) {
+            info!(
+                replica = self.info.replica_id,
+                group = self.info.group_id,
+                ?event,
+                with_data,
+                "finish apply ingest event"
+            );
         }
     }
 

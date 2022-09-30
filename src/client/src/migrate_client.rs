@@ -71,7 +71,7 @@ impl MigrateClient {
 
         loop {
             let client = self.group_client();
-            match client.retryable_pull(shard_id, last_key.clone()).await {
+            match GroupClient::retryable_pull(client, shard_id, last_key.clone()).await {
                 Ok(resp) => return Ok(resp),
                 Err(err) => {
                     retry_state.retry(err).await?;
@@ -95,7 +95,7 @@ impl MigrateClient {
     }
 
     #[inline]
-    fn group_client(&self) -> GroupClient {
+    pub fn group_client(&self) -> GroupClient {
         GroupClient::lazy(
             self.group_id,
             self.router.clone(),

@@ -18,7 +18,7 @@ use engula_api::server::v1::*;
 use engula_client::GroupClient;
 use prometheus::HistogramTimer;
 use tokio::{sync::Mutex, time::Instant};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{allocator::*, metrics, *};
 use crate::{
@@ -701,21 +701,21 @@ impl ScheduleContext {
             .accept_shard(src_group.id, src_group.epoch, shard_desc)
             .await?;
 
-        let mut hearbeat_nodes = Vec::new();
         let src_node = self.find_leader_node(target_group)?;
         if let Some(node_id) = src_node {
-            hearbeat_nodes.push(HeartbeatTask { node_id })
+            self.heartbeat_queue
+                .try_schedule(vec![HeartbeatTask { node_id }], Instant::now())
+                .await;
         }
         let target_node = self.find_leader_node(src_group.id)?;
         if let Some(node_id) = target_node {
-            hearbeat_nodes.push(HeartbeatTask { node_id })
+            self.heartbeat_queue
+                .try_schedule(vec![HeartbeatTask { node_id }], Instant::now())
+                .await;
         }
-        self.heartbeat_queue
-            .try_schedule(hearbeat_nodes, Instant::now())
-            .await;
 
         info!(
-            "migrate shard submitted, shard: {shard}, from: {}, to: {target_group}, {:?}->{:?}",
+            "migrate shard submitted..., shard: {shard}, from: {}, to: {target_group}, {:?}->{:?}",
             src_group.id, src_node, target_node,
         );
         // TODO: handle src_group epoch not match?

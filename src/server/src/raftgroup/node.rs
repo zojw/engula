@@ -80,7 +80,7 @@ where
         mgr: &RaftManager,
         state_machine: M,
     ) -> Result<Self> {
-        let mut applier = Applier::new(group_id, state_machine);
+        let mut applier = Applier::new(group_id, replica_id, state_machine);
         try_apply_fresh_snapshot(replica_id, &mgr.snap_mgr, &mut applier).await;
 
         let cfg = &mgr.cfg;
@@ -127,13 +127,21 @@ where
         data: Vec<u8>,
         context: Vec<u8>,
         sender: oneshot::Sender<Result<()>>,
+        ingest: bool,
     ) {
         if let Err(err) = self.check_proposal_early(false) {
             sender.send(Err(err)).unwrap_or_default();
             return;
         }
 
+        if ingest {
+            tracing::info!("start propose ingest")
+        }
+
         if let Err(err) = self.raw_node.propose(context, data) {
+            if ingest {
+                tracing::info!("propose ingest with err: {:?}", err)
+            }
             if matches!(err, raft::Error::ProposalDropped) {
                 sender
                     .send(Err(Error::ServiceIsBusy(BusyReason::ProposalDropped)))
@@ -146,6 +154,9 @@ where
 
         let index = self.raw_node.raft.raft_log.last_index();
         let term = self.raw_node.raft.term;
+        if ingest {
+            tracing::info!("finish propose ingest, {index}-{term}")
+        }
         self.applier.delegate_proposal_context(index, term, sender);
     }
 
@@ -648,7 +659,7 @@ mod tests {
                 flushed_index: 1,
                 current_snapshot: None,
             };
-            let mut applier = Applier::new(1, state_machine);
+            let mut applier = Applier::new(1, 0, state_machine);
 
             // 1. recover nothing
             try_recover_snapshot(1, &snap_mgr, &engine, &mut storage, &mut applier)
@@ -709,7 +720,7 @@ mod tests {
                 flushed_index: 123,
                 current_snapshot: None,
             };
-            let mut applier = Applier::new(1, state_machine);
+            let mut applier = Applier::new(1, 0, state_machine);
 
             insert_entries(
                 engine.clone(),
@@ -781,7 +792,7 @@ mod tests {
                 flushed_index: 123,
                 current_snapshot: None,
             };
-            let mut applier = Applier::new(1, state_machine);
+            let mut applier = Applier::new(1, 0, state_machine);
 
             create_snapshot(&snap_mgr, 1, 123, 123);
 

@@ -174,11 +174,11 @@ impl RaftManager {
     ) -> Result<RaftNodeFacade> {
         let worker =
             RaftWorker::open(group_id, replica_id, node_id, state_machine, self, observer).await?;
-        let facade = RaftNodeFacade::open(worker.request_sender());
+        let facade = RaftNodeFacade::open(worker.request_sender(), replica_id);
         let log_writer = self.log_writer.clone();
         crate::runtime::current().spawn(Some(group_id), TaskPriority::High, async move {
             // TODO(walter) handle result.
-            worker.run(log_writer).await.unwrap();
+            worker.run(log_writer).await.expect("raft worker exit!!!!!");
             drop(wait_group);
         });
         Ok(facade)
