@@ -148,17 +148,23 @@ impl Jobs {
         job_id: u64,
         create_collection: &mut CreateCollectionJob,
     ) -> Result<()> {
+        let group_candidates = self
+            .core
+            .alloc
+            .place_group_for_shard(create_collection.wait_create.len())
+            .await?;
+        if group_candidates.is_empty() {
+            return Err(crate::Error::ResourceExhausted("no engouth groups".into()));
+        }
+        let mut idx = 0;
         loop {
             let shard = create_collection.wait_create.pop();
             if shard.is_none() {
                 break;
             }
             let shard = shard.unwrap();
-            let groups = self.core.alloc.place_group_for_shard(1).await?;
-            if groups.is_empty() {
-                return Err(crate::Error::ResourceExhausted("no engouth groups".into()));
-            }
-            let group = groups.first().unwrap();
+            let group = group_candidates[idx % group_candidates.len()].to_owned();
+            idx += 1;
             info!(
                 "try create shard at group {}, shards: {}",
                 group.id,
